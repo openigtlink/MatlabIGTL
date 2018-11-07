@@ -42,8 +42,10 @@
 #include "igtlOSUtil.h"
 #include "igtlTransformMessage.h"
 #include "igtlPositionMessage.h"
+#include "igtlPointMessage.h"
 #include "igtlImageMessage.h"
 #include "igtlMexClientSocket.h"
+#include "igtlPointMessage.h"
 
 using namespace std;
 
@@ -75,6 +77,11 @@ int receivePosition(igtl::MexClientSocket::Pointer& socket,
                     igtl::MessageHeader::Pointer& headerMsg,
                     mxArray *plhs[]);
 
+int receiveFiducialList(igtl::MexClientSocket::Pointer& socket,
+					igtl::MessageHeader::Pointer& headerMsg,
+					mxArray *plhs[]);
+
+					
 int receiveImage(igtl::MexClientSocket::Pointer& socket,
                  igtl::MessageHeader::Pointer& headerMsg,
                  mxArray *plhs[]);
@@ -85,6 +92,8 @@ int receiveImage(igtl::MexClientSocket::Pointer& socket,
 void mexFunction (int nlhs, mxArray *plhs[],
                   int nrhs, const mxArray *prhs[])
 {
+
+  // printf("call me :-)\n");
 
   // ---------------------------------------------------------------
   // Check arguments
@@ -169,6 +178,8 @@ void createReturnStructureAndSetError(mxArray* plhs[], int ret)
 int waitAndReceiveMessage(int sd, mxArray *plhs[], int timeout)
 {
   int r;
+  
+  // printf("waitAndReceiveMessage\n");
 
   // ---------------------------------------------------------------
   // Create a message buffer to receive data
@@ -253,12 +264,22 @@ int waitAndReceiveMessage(int sd, mxArray *plhs[], int timeout)
     plhs[0] = mxCreateStructMatrix(1, 1, 5, fnames);
     receivePosition(socket, headerMsg, plhs);
     }
+  else if (strcmp(headerMsg->GetDeviceType(), "POINT") == 0)
+    {
+    // Get strcutre for returned value
+    const char* fnames [] = {
+      "Status", "Type", "Pos"
+    };
+    plhs[0] = mxCreateStructMatrix(1, 1, 3, fnames);
+    receiveFiducialList(socket, headerMsg, plhs);
+    }
   //else if (strcmp(headerMsg->GetDeviceType(), "STATUS") == 0)
   //  {
   //  procReceiveStatus(socket, headerMsg);
   //  }
   else
     {
+	// printf("Header Name not supported....:%s\n",headerMsg->GetDeviceType());
     socket->Skip(headerMsg->GetBodySizeToRead(), 0);
     createReturnStructureAndSetError(plhs, 2);
     return 2;
@@ -323,6 +344,65 @@ int receiveTransform(igtl::MexClientSocket::Pointer& socket,
 
 }
 
+int receiveFiducialList(igtl::MexClientSocket::Pointer& socket,
+                    igtl::MessageHeader::Pointer& headerMsg,
+                    mxArray *plhs[])
+{
+  //std::cerr << "Receiving FiducialList data type." << std::endl;
+  
+  // Create a message buffer to receive transform data
+  igtl::PointMessage::Pointer posMsg;
+  posMsg = igtl::PointMessage::New();
+  posMsg->SetMessageHeader(headerMsg);
+  posMsg->AllocatePack();
+  
+  // Receive transform data from the socket
+  socket->Receive(posMsg->GetPackBodyPointer(), posMsg->GetPackBodySize());
+  
+  // Deserialize the transform data
+  // If you want to skip CRC check, call Unpack() without argument.
+  int c = posMsg->Unpack(1);
+  
+  if (c & igtl::MessageHeader::UNPACK_BODY) // if CRC check is OK
+    {
+    // Retrive position and quaternion data
+    float position[3];
+
+    int number=posMsg->GetNumberOfPointElement();
+	// printf("Number Elements %d",number);
+
+    mxArray* posMatrix  = mxCreateDoubleMatrix(3*number, 1, mxREAL);
+    double*  pos        = mxGetPr(posMatrix);
+
+	
+	igtl::PointElement::Pointer elem;
+	elem=igtl::PointElement::New();
+	for (int i=0;i<number;i++)
+	{
+		posMsg->GetPointElement(i,elem);
+		elem->GetPosition(position[0],position[1],position[2]);
+		// printf("x y z  %f %f %f\n",position[0],position[1],position[2]);
+		pos[i*3+0]=position[0];
+		pos[i*3+1]=position[1];
+		pos[i*3+2]=position[2];
+	}			  
+
+    // Set type string
+    mxArray* typeString = mxCreateString("POSITION");
+    mxSetField(plhs[0], 0, "Type", typeString);
+
+
+    mxSetField(plhs[0], 0, "Pos", posMatrix);
+
+    return 1;
+    }
+  else
+    {
+    return 0;
+    }
+
+}
+
 
 int receivePosition(igtl::MexClientSocket::Pointer& socket,
                     igtl::MessageHeader::Pointer& headerMsg,
@@ -361,8 +441,7 @@ int receivePosition(igtl::MexClientSocket::Pointer& socket,
               << quaternion[0] << "," 
               << quaternion[1] << "," 
               << quaternion[2] << "," 
-              << quaternion[3] << ")" << std::endl;
-
+              << quaternion[3] << ")" << std::endl;    
     // Set type string
     mxArray* typeString = mxCreateString("POSITION");
     mxSetField(plhs[0], 0, "Type", typeString);
